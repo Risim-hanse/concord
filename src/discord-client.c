@@ -13,6 +13,12 @@
 #include "concord-notifier.h"
 #include "cog-utils.h"
 
+struct reflectc *
+discord_get_registry(struct discord *client)
+{
+    return client ? client->registry : NULL;
+}
+
 static int g_shutdown_pipe[2] = { -1, -1 };
 
 static size_t
@@ -237,6 +243,11 @@ _discord_init(struct discord *client)
                    "Couldn't initialize global resources: %s (code %d)",
                    discord_strerror(code, NULL), code);
         return code;
+    }
+    if (!(client->registry = reflectc_init())) {
+        logmod_log(FATAL, client->logger,
+                   "Couldn't initialize data registry for client");
+        return CCORD_INTERNAL_ERROR;
     }
     client->pid = (unsigned)getpid();
     client->is_original = true;
@@ -896,6 +907,7 @@ _discord_clone_cleanup(struct discord *client)
         return;
     }
     _discord_clone_gateway_cleanup(&client->gw);
+    reflectc_dispose(client->registry);
     free(client);
 }
 
@@ -909,6 +921,11 @@ discord_clone(const struct discord *orig)
         return NULL;
     }
     memcpy(clone, orig, sizeof(struct discord));
+    if (!(clone->registry = reflectc_init())) {
+        logmod_log(FATAL, orig->logger,
+                   "Couldn't initialize data registry for client");
+        return free(clone), NULL;
+    }
     clone->is_original = false;
     if ((code = _discord_clone_gateway(&clone->gw, &orig->gw)) != CCORD_OK) {
         logmod_log(FATAL, orig->logger, "Couldn't clone gateway: %s (code %d)",
@@ -945,7 +962,7 @@ discord_cleanup(struct discord *client)
     discord_rest_cleanup(&client->rest);
     discord_gateway_cleanup(&client->gw);
     discord_message_commands_cleanup(&client->commands);
-    discord_user_cleanup(&client->self);
+    reflectc_erase(client->registry, &client->self);
     if (client->cache.cleanup) client->cache.cleanup(client);
     discord_refcounter_cleanup(&client->refcounter);
     discord_timers_cleanup(client, &client->timers.user);
@@ -959,6 +976,7 @@ discord_cleanup(struct discord *client)
         free(client->file.start);
     }
     _discord_global_cleanup();
+    reflectc_dispose(client->registry);
     free(client);
 }
 
